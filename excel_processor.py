@@ -15,51 +15,51 @@ class ExcelProcessor:
         self.topic_classifier = topic_classifier
         self.allowed_extensions = {'xlsx', 'xls', 'csv'}
         
-        # Цвета для тональности (для форматирования)
         self.sentiment_colors = {
-            'positive': '92D050',  # Зеленый
-            'negative': 'FF6B6B',  # Красный
-            'neutral': 'FFD966'     # Желтый
+            'positive': '92D050',
+            'negative': 'FF6B6B',
+            'neutral': 'FFD966'
         }
     
     def get_column_letter(self, index):
-        """
-        Преобразует индекс колонки (0,1,2...) в букву Excel (A, B, C...)
-        Пример: 0 -> A, 1 -> B, 25 -> Z, 26 -> AA
-        """
-        return get_excel_letter(index + 1)  # +1 потому что Excel считает с 1
+        try:
+            return get_excel_letter(index + 1)
+        except:
+            if index < 26:
+                return chr(65 + index)
+            else:
+                first = chr(65 + (index // 26) - 1)
+                second = chr(65 + (index % 26))
+                return first + second
     
     def letter_to_index(self, letter):
-        """
-        Преобразует букву Excel (A, B, C, AA, AB...) в индекс (0,1,2...)
-        Пример: A -> 0, B -> 1, Z -> 25, AA -> 26
-        """
-        return column_index_from_string(letter) - 1  # -1 потому что нам нужен индекс с 0
+        try:
+            return column_index_from_string(letter) - 1
+        except:
+            letter = letter.upper()
+            result = 0
+            for i, char in enumerate(reversed(letter)):
+                result += (ord(char) - 64) * (26 ** i)
+            return result - 1
     
     def allowed_file(self, filename):
-        """Проверка расширения файла"""
         return '.' in filename and filename.rsplit('.', 1)[1].lower() in self.allowed_extensions
     
     def read_excel(self, filepath, sheet_name=0, column_name=None, column_index=0):
-        """Чтение Excel файла"""
         try:
-            # Определяем тип файла
             if filepath.endswith('.csv'):
                 df = pd.read_csv(filepath, encoding='utf-8')
             else:
                 df = pd.read_excel(filepath, sheet_name=sheet_name, engine='openpyxl')
             
-            # Если указано имя колонки
             if column_name and column_name in df.columns:
                 texts = df[column_name].dropna().tolist()
                 return df, texts, column_name
-            # Если указан индекс колонки
             elif column_index < len(df.columns):
                 column_name = df.columns[column_index]
                 texts = df[column_name].dropna().tolist()
                 return df, texts, column_name
             else:
-                # Берем первую колонку
                 column_name = df.columns[0]
                 texts = df[column_name].dropna().tolist()
                 return df, texts, column_name
@@ -67,47 +67,30 @@ class ExcelProcessor:
         except Exception as e:
             raise Exception(f"Ошибка чтения файла: {str(e)}")
     
-
-    
     def analyze_batch(self, texts, progress_callback=None):
-        """Пакетный анализ текстов"""
         results = []
         
         for i, text in enumerate(tqdm(texts, desc="Анализ текстов")):
             try:
-                # Приводим к строке
                 text = str(text) if pd.notna(text) else ""
                 
                 if len(text.strip()) < 3:
-                    # Пропускаем пустые тексты
                     results.append({
                         'text': text,
                         'sentiment': 'neutral',
-                        'sentiment_confidence': 0,
-                        'topic': 'other',
                         'topic_name': 'Другое',
-                        'topic_confidence': 0,
                         'error': 'Текст слишком короткий'
                     })
                 else:
-                    # Анализ тональности
                     sentiment_result = self.sentiment_analyzer.analyze(text)
-                    
-                    # Анализ тематики
                     topic_result = self.topic_classifier.classify(text)
                     
                     results.append({
                         'text': text,
                         'sentiment': sentiment_result['sentiment'],
-                        'sentiment_confidence': sentiment_result['confidence'],
-                        'topic': topic_result['topic'],
-                        'topic_name': topic_result['topic_name'],
-                        'topic_confidence': topic_result['confidence'],
-                        'sentiment_probs': sentiment_result.get('probabilities', {}),
-                        'all_topics': topic_result.get('all_topics', [])
+                        'topic_name': topic_result['topic_name']
                     })
                 
-                # Отправляем прогресс
                 if progress_callback:
                     progress_callback(i + 1, len(texts))
                     
@@ -116,88 +99,64 @@ class ExcelProcessor:
                 results.append({
                     'text': text,
                     'sentiment': 'neutral',
-                    'sentiment_confidence': 0,
-                    'topic': 'other',
                     'topic_name': 'Другое',
-                    'topic_confidence': 0,
                     'error': str(e)
                 })
         
         return results
     
-    def create_result_dataframe(self, original_df, texts_column, results, options=None):
-        """Создание результирующего DataFrame"""
-        if options is None:
-            options = {}
+    def create_result_dataframe(self, original_df, texts_column, results):
+        """Создание результирующего DataFrame с тональностью и тематикой"""
         
-        result_df = original_df.copy()
+        # Берем только проанализированные строки
+        analyzed_count = len(results)
+        result_df = original_df.iloc[:analyzed_count].copy()
         
-        # Добавляем новые колонки
+        print(f"📊 Создание DataFrame: анализировано {analyzed_count} строк из {len(original_df)}")
+        
+        # Добавляем колонки с тональностью и тематикой
         result_df['Тональность'] = [r['sentiment'] for r in results]
-        
-        if options.get('include_confidence', True):
-            result_df['Уверенность_тональности'] = [r['sentiment_confidence'] for r in results]
-        
         result_df['Тематика'] = [r['topic_name'] for r in results]
-        
-        if options.get('include_confidence', True):
-            result_df['Уверенность_тематики'] = [r['topic_confidence'] for r in results]
-        
-        # Добавляем эмодзи для наглядности
-        if options.get('add_emoji', True):
-            emoji_map = {'positive': '😊', 'negative': '😠', 'neutral': '😐'}
-            result_df['Эмодзи'] = [emoji_map.get(r['sentiment'], '🤔') for r in results]
-        
-        # Добавляем альтернативные темы (топ-3)
-        if options.get('include_alt_topics', True):
-            alt_topics = []
-            for r in results:
-                if r.get('all_topics'):
-                    topics = [f"{t['name']}({t['confidence']:.2f})" for t in r['all_topics'][:3]]
-                    alt_topics.append(', '.join(topics))
-                else:
-                    alt_topics.append('')
-            result_df['Альтернативные_темы'] = alt_topics
         
         return result_df
     
     def save_to_excel(self, df, original_filename, output_dir='downloads'):
-        """Сохранение результатов в Excel с форматированием"""
-        # Создаем папку для загрузок если её нет
         os.makedirs(output_dir, exist_ok=True)
         
-        # Генерируем имя файла
         base_name = secure_filename(original_filename)
         name_without_ext = os.path.splitext(base_name)[0]
         output_filename = f"{name_without_ext}_analyzed_{int(time.time())}.xlsx"
         output_path = os.path.join(output_dir, output_filename)
         
-        # Сохраняем с форматированием
         with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
             df.to_excel(writer, sheet_name='Результаты анализа', index=False)
             
-            # Получаем workbook и worksheet
             workbook = writer.book
             worksheet = writer.sheets['Результаты анализа']
             
-            # Форматирование
             self._format_excel(worksheet, df)
         
         return output_path, output_filename
     
     def _format_excel(self, worksheet, df):
-        """Форматирование Excel файла"""
-        # Стили
-        header_font = Font(bold=True, color="FFFFFF", size=11)
-        header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
-        header_alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        """Форматирование Excel файла - компактный вариант"""
         
+        # Более компактный шрифт для заголовков
+        header_font = Font(bold=True, color="FFFFFF", size=10)
+        header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+        header_alignment = Alignment(horizontal="center", vertical="center", wrap_text=False)
+        
+        # Тонкие границы
         border = Border(
             left=Side(style='thin'),
             right=Side(style='thin'),
             top=Side(style='thin'),
             bottom=Side(style='thin')
         )
+        
+        # Стиль для данных
+        data_font = Font(size=9)
+        data_alignment = Alignment(horizontal="left", vertical="center", wrap_text=False)
         
         # Форматируем заголовки
         for col_idx, col_name in enumerate(df.columns, 1):
@@ -206,51 +165,104 @@ class ExcelProcessor:
             cell.fill = header_fill
             cell.alignment = header_alignment
             cell.border = border
+        
+        # Устанавливаем высоту строк по умолчанию
+        worksheet.row_dimensions[1].height = 15
+        
+        # === НАСТРОЙКА ШИРИНЫ КОЛОНОК ===
+        # Получаем буквы колонок
+        col_letters = []
+        for i in range(len(df.columns)):
+            col_letters.append(openpyxl.utils.get_column_letter(i + 1))
+    
+        
+        # Устанавливаем ширину для каждой колонки
+        for col_idx, col_letter in enumerate(col_letters, 1):
+            col_name = df.columns[col_idx-1] if col_idx-1 < len(df.columns) else ""
             
-            # Автоподбор ширины
-            max_length = len(str(col_name))
-            column_letter = openpyxl.utils.get_column_letter(col_idx)
-            worksheet.column_dimensions[column_letter].width = min(max_length + 5, 50)
+            # === НАСТРОЙКА ПО УМОЛЧАНИЮ ===
+            default_width = 12  # Стандартная ширина
+            
+            # === ИНДИВИДУАЛЬНЫЕ НАСТРОЙКИ ===
+            
+     
+            
+            # Колонка D - делаем ШИРЕ (для текстов)
+            if col_letter == 'D':
+                worksheet.column_dimensions[col_letter].width = 30  # Широкая колонка для текстов
+            
+            # Колонки с тональностью (обычно идут после D)
+            elif 'Тональность' in col_name:
+                worksheet.column_dimensions[col_letter].width = 14
+            
+            # Колонки с тематикой
+            elif 'Тематика' in col_name:
+                worksheet.column_dimensions[col_letter].width = 18
+            
+            # Колонки с уверенностью
+            elif 'Уверенность' in col_name:
+                worksheet.column_dimensions[col_letter].width = 12
+            
+            # Колонка с эмодзи
+            elif 'Эмодзи' in col_name:
+                worksheet.column_dimensions[col_letter].width = 8
+            
+            # Альтернативные темы
+            elif 'Альтернативные' in col_name:
+                worksheet.column_dimensions[col_letter].width = 20
+            
+            # Все остальные колонки
+            else:
+                # Автоподбор ширины по содержимому, но с ограничением
+                max_length = 0
+                for row in worksheet.iter_rows(min_row=2, max_row=min(10, worksheet.max_row), 
+                                            min_col=col_idx, max_col=col_idx):
+                    for cell in row:
+                        if cell.value:
+                            max_length = max(max_length, len(str(cell.value)))
+                width = min(max(max_length + 2, default_width), 18)
+                worksheet.column_dimensions[col_letter].width = width
         
         # Форматируем данные
         for row_idx, row in enumerate(worksheet.iter_rows(min_row=2, max_row=worksheet.max_row), 2):
+            worksheet.row_dimensions[row_idx].height = 13
+            
             for col_idx, cell in enumerate(row, 1):
+                cell.font = data_font
+                cell.alignment = data_alignment
                 cell.border = border
-                cell.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
                 
                 # Цвет для тональности
                 if df.columns[col_idx-1] == 'Тональность':
                     sentiment = cell.value
                     if sentiment in self.sentiment_colors:
+                        colors = {
+                            'positive': 'E2F0D9',
+                            'negative': 'FCE4D6',
+                            'neutral': 'FFF2CC'
+                        }
                         cell.fill = PatternFill(
-                            start_color=self.sentiment_colors[sentiment],
-                            end_color=self.sentiment_colors[sentiment],
+                            start_color=colors.get(sentiment, 'FFFFFF'),
+                            end_color=colors.get(sentiment, 'FFFFFF'),
                             fill_type="solid"
                         )
-                
-                # Автоподбор ширины для длинных текстов
-                if col_idx == 1:  # Первая колонка с текстом
-                    max_length = min(len(str(cell.value)) if cell.value else 0, 100)
-                    current_width = worksheet.column_dimensions[openpyxl.utils.get_column_letter(col_idx)].width
-                    worksheet.column_dimensions[openpyxl.utils.get_column_letter(col_idx)].width = max(current_width or 0, max_length + 5)
         
         # Добавляем фильтры
         worksheet.auto_filter.ref = worksheet.dimensions
         
         # Фиксируем шапку
         worksheet.freeze_panes = 'A2'
+    
+    print("✅ Excel отформатирован с индивидуальными настройками колонок")
 
 
 class BatchAnalyzer:
-    """Класс для управления пакетным анализом"""
-    
     def __init__(self, excel_processor):
         self.excel_processor = excel_processor
-        self.jobs = {}  # Словарь для хранения заданий
+        self.jobs = {}
         self.job_counter = 0
     
     def create_job(self, filepath, original_filename, column_info):
-        """Создание нового задания на анализ"""
         job_id = f"job_{int(time.time())}_{self.job_counter}"
         self.job_counter += 1
         
@@ -259,7 +271,7 @@ class BatchAnalyzer:
             'filepath': filepath,
             'original_filename': original_filename,
             'column_info': column_info,
-            'status': 'pending',  # pending, processing, completed, error
+            'status': 'pending',
             'progress': 0,
             'total': 0,
             'result_path': None,
@@ -271,14 +283,12 @@ class BatchAnalyzer:
         return job_id
     
     def update_job_progress(self, job_id, current, total):
-        """Обновление прогресса задания"""
         if job_id in self.jobs:
             self.jobs[job_id]['progress'] = current
             self.jobs[job_id]['total'] = total
             self.jobs[job_id]['status'] = 'processing'
     
     def complete_job(self, job_id, result_path, result_filename):
-        """Завершение задания"""
         if job_id in self.jobs:
             self.jobs[job_id]['status'] = 'completed'
             self.jobs[job_id]['progress'] = self.jobs[job_id]['total']
@@ -286,17 +296,14 @@ class BatchAnalyzer:
             self.jobs[job_id]['result_filename'] = result_filename
     
     def fail_job(self, job_id, error):
-        """Отметить задание как ошибочное"""
         if job_id in self.jobs:
             self.jobs[job_id]['status'] = 'error'
             self.jobs[job_id]['error'] = str(error)
     
     def get_job(self, job_id):
-        """Получить информацию о задании"""
         return self.jobs.get(job_id)
     
     def cleanup_old_jobs(self, max_age=3600):
-        """Очистка старых заданий (по умолчанию час)"""
         current_time = time.time()
         to_delete = []
         
@@ -304,7 +311,6 @@ class BatchAnalyzer:
             if current_time - job['created_at'] > max_age:
                 to_delete.append(job_id)
                 
-                # Удаляем файлы
                 if job.get('filepath') and os.path.exists(job['filepath']):
                     try:
                         os.remove(job['filepath'])
