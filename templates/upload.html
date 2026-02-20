@@ -1,0 +1,721 @@
+<!doctype html>
+<html lang="ru">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Загрузка Excel для анализа</title>
+        <link
+            rel="stylesheet"
+            href="{{ url_for('static', filename='style.css') }}"
+        />
+        <link
+            rel="stylesheet"
+            href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css"
+        />
+        <style>
+            .upload-container {
+                max-width: 800px;
+                margin: 0 auto;
+                padding: 30px;
+                background: white;
+                border-radius: 15px;
+                box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+            }
+
+            .upload-area {
+                border: 3px dashed #667eea;
+                border-radius: 15px;
+                padding: 50px;
+                text-align: center;
+                background: #f8f9fa;
+                cursor: pointer;
+                transition: all 0.3s;
+                margin: 20px 0;
+            }
+
+            .upload-area:hover {
+                background: #e8f0fe;
+                border-color: #764ba2;
+            }
+
+            .upload-area i {
+                font-size: 4em;
+                color: #667eea;
+                margin-bottom: 20px;
+            }
+
+            .upload-area h3 {
+                color: #333;
+                margin-bottom: 10px;
+            }
+
+            .upload-area p {
+                color: #666;
+                margin-bottom: 20px;
+            }
+
+            .file-info {
+                background: #e8f0fe;
+                padding: 15px;
+                border-radius: 8px;
+                margin: 20px 0;
+                display: none;
+            }
+
+            .column-selector {
+                background: #f8f9fa;
+                padding: 20px;
+                border-radius: 8px;
+                margin: 20px 0;
+                border: 1px solid #e0e0e0;
+            }
+
+            .preview-table {
+                max-height: 300px;
+                overflow-y: auto;
+                border: 1px solid #e0e0e0;
+                border-radius: 8px;
+                margin: 20px 0;
+            }
+
+            .preview-table table {
+                width: 100%;
+                border-collapse: collapse;
+            }
+
+            .preview-table th {
+                background: #667eea;
+                color: white;
+                padding: 10px;
+                position: sticky;
+                top: 0;
+                z-index: 10;
+            }
+
+            .preview-table td {
+                padding: 8px;
+                border-bottom: 1px solid #e0e0e0;
+            }
+
+            .preview-table tr:hover {
+                background: #f0f0f0;
+            }
+
+            .progress-container {
+                margin: 30px 0;
+                display: none;
+            }
+
+            .progress-bar {
+                width: 100%;
+                height: 30px;
+                background: #e0e0e0;
+                border-radius: 15px;
+                overflow: hidden;
+                margin: 10px 0;
+            }
+
+            .progress-fill {
+                height: 100%;
+                background: linear-gradient(90deg, #667eea, #764ba2);
+                transition: width 0.3s ease;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                color: white;
+                font-size: 0.9em;
+            }
+
+            .job-status {
+                margin: 20px 0;
+                padding: 15px;
+                border-radius: 8px;
+                display: none;
+            }
+
+            .status-processing {
+                background: #fff3cd;
+                color: #856404;
+                border: 1px solid #ffeeba;
+            }
+
+            .status-completed {
+                background: #d4edda;
+                color: #155724;
+                border: 1px solid #c3e6cb;
+            }
+
+            .status-error {
+                background: #f8d7da;
+                color: #721c24;
+                border: 1px solid #f5c6cb;
+            }
+
+            .download-btn {
+                display: inline-block;
+                padding: 15px 30px;
+                background: linear-gradient(135deg, #4caf50, #45a049);
+                color: white;
+                text-decoration: none;
+                border-radius: 8px;
+                font-weight: bold;
+                margin: 20px 0;
+                transition: transform 0.3s;
+            }
+
+            .download-btn:hover {
+                transform: translateY(-2px);
+                box-shadow: 0 5px 15px rgba(76, 175, 80, 0.3);
+            }
+
+            .options-panel {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+                gap: 15px;
+                margin: 20px 0;
+            }
+
+            .option-item {
+                display: flex;
+                align-items: center;
+                gap: 10px;
+            }
+
+            .batch-actions {
+                display: flex;
+                gap: 15px;
+                justify-content: center;
+                margin-top: 30px;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <header>
+                <h1><i class="fas fa-file-excel"></i> Пакетный анализ Excel</h1>
+                <p class="subtitle">
+                    Загрузите Excel файл с текстами для массового анализа
+                </p>
+                <div class="model-info">
+                    <i class="fas fa-info-circle"></i>
+                    Программа проанализирует все тексты и добавит колонки с
+                    тональностью и тематикой
+                </div>
+            </header>
+
+            <div class="main-content">
+                <div class="upload-container">
+                    <!-- Загрузка файла -->
+                    <div
+                        class="upload-area"
+                        id="uploadArea"
+                        onclick="document.getElementById('fileInput').click()"
+                    >
+                        <i class="fas fa-cloud-upload-alt"></i>
+                        <h3>Нажмите для загрузки Excel файла</h3>
+                        <p>или перетащите файл сюда</p>
+                        <input
+                            type="file"
+                            id="fileInput"
+                            accept=".xlsx,.xls,.csv"
+                            style="display: none"
+                        />
+                    </div>
+
+                    <!-- Информация о файле -->
+                    <div class="file-info" id="fileInfo">
+                        <h4>
+                            <i
+                                class="fas fa-check-circle"
+                                style="color: #4caf50"
+                            ></i>
+                            Файл загружен:
+                        </h4>
+                        <p id="fileName"></p>
+                        <p id="fileDetails"></p>
+                    </div>
+
+                    <!-- Селектор колонки -->
+                    <div
+                        class="column-selector"
+                        id="columnSelector"
+                        style="display: none"
+                    >
+                        <h4>
+                            <i class="fas fa-columns"></i> Выберите колонку с
+                            текстами:
+                        </h4>
+                        <select
+                            id="columnSelect"
+                            class="form-control"
+                            style="width: 100%; padding: 10px; margin: 10px 0"
+                        >
+                            <option value="">Загрузка колонок...</option>
+                        </select>
+
+                        <div class="options-panel">
+                            <div class="option-item">
+                                <input
+                                    type="checkbox"
+                                    id="includeConfidence"
+                                    checked
+                                />
+                                <label>Добавить колонки с уверенностью</label>
+                            </div>
+                            <div class="option-item">
+                                <input
+                                    type="checkbox"
+                                    id="includeAltTopics"
+                                    checked
+                                />
+                                <label>Добавить альтернативные темы</label>
+                            </div>
+                            <div class="option-item">
+                                <input type="checkbox" id="addEmoji" checked />
+                                <label>Добавить эмодзи</label>
+                            </div>
+                        </div>
+
+                        <!-- После options-panel -->
+                        <div
+                            class="rows-selector"
+                            style="
+                                margin: 20px 0;
+                                padding: 15px;
+                                background: #f0f4ff;
+                                border-radius: 8px;
+                                border-left: 4px solid #667eea;
+                            "
+                        >
+                            <h4>
+                                <i class="fas fa-list-ol"></i> Выбор количества
+                                строк:
+                            </h4>
+                            <div
+                                style="
+                                    display: flex;
+                                    align-items: center;
+                                    gap: 15px;
+                                    flex-wrap: wrap;
+                                "
+                            >
+                                <div style="flex: 1">
+                                    <label
+                                        for="rowCount"
+                                        style="
+                                            display: block;
+                                            margin-bottom: 5px;
+                                            color: #333;
+                                        "
+                                    >
+                                        <i class="fas fa-calculator"></i>
+                                        Сколько строк обработать:
+                                    </label>
+                                    <select
+                                        id="rowCount"
+                                        style="
+                                            width: 100%;
+                                            padding: 10px;
+                                            border: 2px solid #667eea;
+                                            border-radius: 5px;
+                                        "
+                                    >
+                                        <option value="0">
+                                            📊 Все строки (полный анализ)
+                                        </option>
+                                        <option value="10">
+                                            🔟 Первые 10 строк
+                                        </option>
+                                        <option value="50">
+                                            🔢 Первые 50 строк
+                                        </option>
+                                        <option value="100">
+                                            💯 Первые 100 строк
+                                        </option>
+                                        <option value="custom">
+                                            ✏️ Свое значение
+                                        </option>
+                                    </select>
+                                </div>
+                                <div
+                                    id="customRowInput"
+                                    style="display: none; flex: 1"
+                                >
+                                    <label
+                                        style="
+                                            display: block;
+                                            margin-bottom: 5px;
+                                            color: #333;
+                                        "
+                                    >
+                                        <i class="fas fa-pencil-alt"></i>
+                                        Введите количество:
+                                    </label>
+                                    <input
+                                        type="number"
+                                        id="customRowCount"
+                                        min="1"
+                                        max="10000"
+                                        value="100"
+                                        style="
+                                            width: 100%;
+                                            padding: 10px;
+                                            border: 2px solid #667eea;
+                                            border-radius: 5px;
+                                        "
+                                    />
+                                </div>
+                            </div>
+                            <p
+                                style="
+                                    margin-top: 10px;
+                                    font-size: 0.9em;
+                                    color: #666;
+                                "
+                            >
+                                <i class="fas fa-info-circle"></i>
+                                <span id="totalRowsInfo"
+                                    >Всего строк в файле: загрузите файл</span
+                                >
+                            </p>
+                        </div>
+
+                        <button
+                            class="btn analyze-btn"
+                            onclick="startAnalysis()"
+                            style="width: 100%"
+                        >
+                            <i class="fas fa-play"></i> Начать анализ
+                        </button>
+                    </div>
+
+                    <!-- Прогресс -->
+                    <div class="progress-container" id="progressContainer">
+                        <h4>
+                            <i class="fas fa-chart-line"></i> Прогресс анализа:
+                        </h4>
+                        <div class="progress-bar">
+                            <div
+                                class="progress-fill"
+                                id="progressFill"
+                                style="width: 0%"
+                            >
+                                0%
+                            </div>
+                        </div>
+                        <p id="progressText">Подготовка...</p>
+                    </div>
+
+                    <!-- Статус задания -->
+                    <div class="job-status" id="jobStatus"></div>
+
+                    <!-- Кнопка загрузки результата -->
+                    <div
+                        id="resultContainer"
+                        style="text-align: center; display: none"
+                    >
+                        <a href="#" id="downloadLink" class="download-btn">
+                            <i class="fas fa-download"></i> Скачать результат
+                        </a>
+                        <p style="margin-top: 10px; color: #666">
+                            <i class="fas fa-clock"></i> Файл будет доступен для
+                            скачивания в течение часа
+                        </p>
+                    </div>
+
+                    <!-- Предпросмотр -->
+                    <div id="previewContainer" style="display: none">
+                        <h4>
+                            <i class="fas fa-eye"></i> Предпросмотр данных
+                            (первые 5 строк):
+                        </h4>
+                        <div class="preview-table" id="previewTable"></div>
+                    </div>
+                </div>
+            </div>
+
+            <footer>
+                <p>
+                    Пакетный анализ текстов • Поддерживаются форматы: .xlsx,
+                    .xls, .csv
+                </p>
+            </footer>
+        </div>
+
+        <script>
+            let currentJobId = null;
+            let checkInterval = null;
+
+            // Обработка загрузки файла
+            document
+                .getElementById("fileInput")
+                .addEventListener("change", function (e) {
+                    console.log("📁 Выбран файл через input");
+                    uploadFile(this.files[0]);
+                });
+
+            // Drag and drop
+            const uploadArea = document.getElementById("uploadArea");
+
+            uploadArea.addEventListener("dragover", (e) => {
+                e.preventDefault();
+                uploadArea.style.background = "#e8f0fe";
+            });
+
+            uploadArea.addEventListener("dragleave", (e) => {
+                e.preventDefault();
+                uploadArea.style.background = "#f8f9fa";
+            });
+
+            uploadArea.addEventListener("drop", (e) => {
+                e.preventDefault();
+                uploadArea.style.background = "#f8f9fa";
+                const file = e.dataTransfer.files[0];
+                if (file) {
+                    console.log("📁 Файл перетащен:", file.name);
+                    uploadFile(file);
+                }
+            });
+
+            function uploadFile(file) {
+                if (!file) {
+                    console.error("❌ Нет файла");
+                    return;
+                }
+
+                console.log(
+                    "📤 Загружаем файл:",
+                    file.name,
+                    "размер:",
+                    file.size,
+                );
+
+                const formData = new FormData();
+                formData.append("file", file);
+
+                // Показываем информацию о файле
+                document.getElementById("fileInfo").style.display = "block";
+                document.getElementById("fileName").textContent = file.name;
+                document.getElementById("fileDetails").textContent =
+                    `Размер: ${(file.size / 1024).toFixed(2)} KB | Тип: ${file.type || "Excel"}`;
+
+                // Блокируем кнопки
+                const uploadArea = document.getElementById("uploadArea");
+                uploadArea.style.opacity = "0.5";
+                uploadArea.style.pointerEvents = "none";
+
+                // Загружаем файл
+                console.log("🔄 Отправка запроса на сервер...");
+
+                fetch("/upload_excel", {
+                    method: "POST",
+                    body: formData,
+                })
+                    .then(async (response) => {
+                        console.log(
+                            "📥 Получен ответ от сервера, статус:",
+                            response.status,
+                        );
+                        const data = await response.json();
+                        console.log("📦 Данные ответа:", data);
+
+                        if (!response.ok) {
+                            throw new Error(
+                                data.error ||
+                                    `HTTP error! status: ${response.status}`,
+                            );
+                        }
+                        return data;
+                    })
+                    .then((data) => {
+                        console.log("✅ Успешная загрузка:", data);
+                        if (data.error) {
+                            alert("Ошибка: " + data.error);
+                            // Разблокируем
+                            uploadArea.style.opacity = "1";
+                            uploadArea.style.pointerEvents = "auto";
+                        } else {
+                            showColumnSelector(data);
+                        }
+                    })
+                    .catch((error) => {
+                        console.error("❌ Ошибка:", error);
+                        alert("Ошибка загрузки файла: " + error.message);
+                        // Разблокируем
+                        uploadArea.style.opacity = "1";
+                        uploadArea.style.pointerEvents = "auto";
+                    });
+            }
+
+            function showColumnSelector(data) {
+                console.log("📊 Показываем селектор колонок");
+                const selector = document.getElementById("columnSelector");
+                const select = document.getElementById("columnSelect");
+
+                select.innerHTML = "";
+
+                // Добавляем опции с буквами колонок
+                data.columns.forEach((col) => {
+                    const option = document.createElement("option");
+                    option.value = col.letter;
+                    option.textContent = col.display;
+
+                    // Если это колонка D (индекс 3), можно сделать ее выбранной по умолчанию
+                    if (col.letter === "D") {
+                        option.selected = true;
+                        console.log("✅ Колонка D выбрана по умолчанию");
+                    }
+
+                    select.appendChild(option);
+                });
+
+                selector.style.display = "block";
+
+                // Показываем предпросмотр
+                const previewContainer =
+                    document.getElementById("previewContainer");
+                const previewTable = document.getElementById("previewTable");
+
+                let html = "<table><tr>";
+                data.preview.columns.forEach((col) => {
+                    html += `<th>${col}</th>`;
+                });
+                html += "</tr>";
+
+                data.preview.rows.forEach((row) => {
+                    html += "<tr>";
+                    row.forEach((cell) => {
+                        html += `<td>${cell || ""}</td>`;
+                    });
+                    html += "</tr>";
+                });
+                html += "</table>";
+
+                previewTable.innerHTML = html;
+                previewContainer.style.display = "block";
+
+                // Разблокируем upload area
+                document.getElementById("uploadArea").style.opacity = "1";
+                document.getElementById("uploadArea").style.pointerEvents =
+                    "auto";
+
+                console.log("✅ Селектор отображен");
+            }
+
+            function startAnalysis() {
+                const columnLetter =
+                    document.getElementById("columnSelect").value;
+                const includeConfidence =
+                    document.getElementById("includeConfidence").checked;
+                const includeAltTopics =
+                    document.getElementById("includeAltTopics").checked;
+                const addEmoji = document.getElementById("addEmoji").checked;
+
+                console.log("▶️ Запуск анализа для колонки:", columnLetter);
+
+                if (!columnLetter) {
+                    alert("Пожалуйста, выберите колонку с текстами");
+                    return;
+                }
+
+                // Показываем прогресс
+                document.getElementById("progressContainer").style.display =
+                    "block";
+                document.getElementById("columnSelector").style.display =
+                    "none";
+
+                fetch("/start_batch_analysis", {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                    },
+                    body: JSON.stringify({
+                        column: columnLetter,
+                        options: {
+                            include_confidence: includeConfidence,
+                            include_alt_topics: includeAltTopics,
+                            add_emoji: addEmoji,
+                        },
+                    }),
+                })
+                    .then((response) => response.json())
+                    .then((data) => {
+                        console.log("📥 Ответ от сервера:", data);
+                        if (data.error) {
+                            alert("Ошибка: " + data.error);
+                        } else {
+                            currentJobId = data.job_id;
+                            startProgressCheck();
+                        }
+                    })
+                    .catch((error) => {
+                        console.error("❌ Ошибка:", error);
+                        alert("Ошибка запуска анализа: " + error.message);
+                    });
+            }
+
+            function startProgressCheck() {
+                if (checkInterval) {
+                    clearInterval(checkInterval);
+                }
+                checkInterval = setInterval(checkProgress, 1000);
+            }
+
+            function checkProgress() {
+                if (!currentJobId) return;
+
+                fetch(`/job_status/${currentJobId}`)
+                    .then((response) => response.json())
+                    .then((data) => {
+                        updateProgress(data);
+
+                        if (data.status === "completed") {
+                            clearInterval(checkInterval);
+                            showDownloadLink(data.result_filename);
+                        } else if (data.status === "error") {
+                            clearInterval(checkInterval);
+                            showError(data.error);
+                        }
+                    })
+                    .catch((error) => {
+                        console.error("Error:", error);
+                    });
+            }
+
+            function updateProgress(data) {
+                const progressFill = document.getElementById("progressFill");
+                const progressText = document.getElementById("progressText");
+
+                const percent =
+                    Math.round((data.progress / data.total) * 100) || 0;
+                progressFill.style.width = percent + "%";
+                progressFill.textContent = percent + "%";
+
+                progressText.textContent = `Обработано ${data.progress} из ${data.total} текстов`;
+
+                const jobStatus = document.getElementById("jobStatus");
+                jobStatus.style.display = "block";
+                jobStatus.className = "job-status status-processing";
+                jobStatus.innerHTML = `<i class="fas fa-spinner fa-spin"></i> Анализ в процессе...`;
+            }
+
+            function showDownloadLink(filename) {
+                const jobStatus = document.getElementById("jobStatus");
+                jobStatus.className = "job-status status-completed";
+                jobStatus.innerHTML = `<i class="fas fa-check-circle"></i> Анализ завершен!`;
+
+                document.getElementById("resultContainer").style.display =
+                    "block";
+                document.getElementById("downloadLink").href =
+                    `/download/${filename}`;
+            }
+
+            function showError(error) {
+                const jobStatus = document.getElementById("jobStatus");
+                jobStatus.style.display = "block";
+                jobStatus.className = "job-status status-error";
+                jobStatus.innerHTML = `<i class="fas fa-exclamation-circle"></i> Ошибка: ${error}`;
+            }
+        </script>
+    </body>
+</html>
