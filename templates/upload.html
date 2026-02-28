@@ -235,6 +235,40 @@
             margin-top: 20px;
         }
         
+        .stop-btn {
+            background: #dc3545;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 8px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        
+        .stop-btn:hover {
+            background: #c82333;
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(220, 53, 69, 0.3);
+        }
+        
+        .stop-btn:disabled {
+            background: #6c757d;
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+        }
+        
+        .cancelled-message {
+            background: #fff3cd;
+            color: #856404;
+            padding: 15px;
+            border-radius: 8px;
+            margin: 20px 0;
+            text-align: center;
+            border-left: 4px solid #ffc107;
+        }
+        
         .navigation {
             display: flex;
             justify-content: center;
@@ -271,7 +305,6 @@
             font-size: 0.9rem;
         }
         
-        /* Стиль для информационного сообщения о добавляемых колонках */
         .info-message {
             background: #e3f2fd;
             color: #0d47a1;
@@ -336,7 +369,7 @@
                     <!-- Информация о том, что будет добавлено -->
                     <div class="info-message">
                         <i class="fas fa-info-circle"></i>
-                        Будут добавлены колонки: <strong>Тональность</strong> (😊😠😐) и <strong>Тематика</strong>
+                        Будут добавлены колонки: <strong>Тональность</strong> и <strong>Тематика</strong>
                     </div>
 
                     <!-- Выбор количества строк -->
@@ -382,6 +415,13 @@
                         <div class="progress-fill" id="progressFill" style="width: 0%">0%</div>
                     </div>
                     <p id="progressText">Подготовка...</p>
+                    
+                    <!-- Кнопка остановки анализа -->
+                    <div style="text-align: center; margin-top: 15px;">
+                        <button onclick="stopAnalysis()" class="btn stop-btn" id="stopButton" style="display: none;">
+                            <i class="fas fa-stop"></i> Остановить анализ
+                        </button>
+                    </div>
                 </div>
 
                 <!-- Статус задания -->
@@ -414,6 +454,7 @@
         let currentJobId = null;
         let checkInterval = null;
         let totalRows = 0;
+        let isCancelled = false;
 
         document.getElementById('fileInput').addEventListener('change', function(e) {
             console.log('📁 Выбран файл через input');
@@ -585,8 +626,18 @@
                 rowLimit = totalRows;
             }
 
+            // Сбрасываем флаг отмены
+            isCancelled = false;
+            
             document.getElementById('progressContainer').style.display = 'block';
             document.getElementById('columnSelector').style.display = 'none';
+            
+            // Показываем кнопку остановки
+            document.getElementById('stopButton').style.display = 'inline-block';
+            
+            // Убираем предыдущее сообщение об отмене если было
+            const oldCancelMsg = document.getElementById('cancelledMessage');
+            if (oldCancelMsg) oldCancelMsg.remove();
 
             fetch('/start_batch_analysis', {
                 method: 'POST',
@@ -611,7 +662,74 @@
             .catch(error => {
                 console.error('❌ Ошибка:', error);
                 alert('Ошибка запуска анализа: ' + error.message);
+                document.getElementById('stopButton').style.display = 'none';
             });
+        }
+
+        function stopAnalysis() {
+            if (!currentJobId) return;
+            
+            if (confirm('Вы уверены, что хотите остановить анализ? Прогресс будет потерян.')) {
+                console.log('🛑 Остановка анализа:', currentJobId);
+                
+                isCancelled = true;
+                
+                // Отключаем кнопку остановки
+                const stopBtn = document.getElementById('stopButton');
+                stopBtn.disabled = true;
+                stopBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Останавливаем...';
+                
+                // Отправляем запрос на остановку
+                fetch(`/stop_analysis/${currentJobId}`, {
+                    method: 'POST'
+                })
+                .then(response => response.json())
+                .then(data => {
+                    console.log('✅ Анализ остановлен:', data);
+                    
+                    // Останавливаем проверку прогресса
+                    if (checkInterval) {
+                        clearInterval(checkInterval);
+                        checkInterval = null;
+                    }
+                    
+                    // Показываем сообщение об остановке
+                    showCancelledMessage();
+                    
+                    // Сбрасываем интерфейс
+                    stopBtn.style.display = 'none';
+                    document.getElementById('progressFill').style.width = '0%';
+                    document.getElementById('progressFill').textContent = '0%';
+                    document.getElementById('progressText').textContent = 'Анализ остановлен';
+                    
+                    // Возвращаем селектор колонки
+                    setTimeout(() => {
+                        document.getElementById('columnSelector').style.display = 'block';
+                        document.getElementById('progressContainer').style.display = 'none';
+                    }, 2000);
+                })
+                .catch(error => {
+                    console.error('❌ Ошибка при остановке:', error);
+                    alert('Ошибка при остановке анализа');
+                    stopBtn.disabled = false;
+                    stopBtn.innerHTML = '<i class="fas fa-stop"></i> Остановить анализ';
+                });
+            }
+        }
+
+        function showCancelledMessage() {
+            const container = document.querySelector('.upload-container');
+            const messageDiv = document.createElement('div');
+            messageDiv.id = 'cancelledMessage';
+            messageDiv.className = 'cancelled-message';
+            messageDiv.innerHTML = `
+                <i class="fas fa-exclamation-triangle"></i>
+                Анализ был остановлен пользователем
+            `;
+            
+            // Вставляем после прогресса
+            const progressContainer = document.getElementById('progressContainer');
+            container.insertBefore(messageDiv, progressContainer.nextSibling);
         }
 
         function startProgressCheck() {
@@ -623,6 +741,7 @@
 
         function checkProgress() {
             if (!currentJobId) return;
+            if (isCancelled) return;
 
             fetch(`/job_status/${currentJobId}`)
                 .then(response => response.json())
@@ -635,6 +754,9 @@
                     } else if (data.status === 'error') {
                         clearInterval(checkInterval);
                         showError(data.error);
+                    } else if (data.status === 'cancelled') {
+                        clearInterval(checkInterval);
+                        showCancelledMessage();
                     }
                 })
                 .catch(error => {
@@ -643,6 +765,8 @@
         }
 
         function updateProgress(data) {
+            if (isCancelled) return;
+            
             const progressFill = document.getElementById('progressFill');
             const progressText = document.getElementById('progressText');
             
@@ -659,6 +783,9 @@
         }
 
         function showDownloadLink(filename) {
+            // Скрываем кнопку остановки
+            document.getElementById('stopButton').style.display = 'none';
+            
             const jobStatus = document.getElementById('jobStatus');
             jobStatus.className = 'job-status status-completed';
             jobStatus.innerHTML = `<i class="fas fa-check-circle"></i> Анализ завершен!`;
@@ -668,6 +795,9 @@
         }
 
         function showError(error) {
+            // Скрываем кнопку остановки
+            document.getElementById('stopButton').style.display = 'none';
+            
             const jobStatus = document.getElementById('jobStatus');
             jobStatus.style.display = 'block';
             jobStatus.className = 'job-status status-error';

@@ -68,10 +68,15 @@ class ExcelProcessor:
             raise Exception(f"Ошибка чтения файла: {str(e)}")
     
     def analyze_batch(self, texts, progress_callback=None):
+        """Пакетный анализ текстов с возможностью остановки"""
         results = []
-        
+    
         for i, text in enumerate(tqdm(texts, desc="Анализ текстов")):
             try:
+                # Проверяем, не запрошена ли остановка (через исключение в callback)
+                if progress_callback:
+                    progress_callback(i + 1, len(texts))
+                
                 text = str(text) if pd.notna(text) else ""
                 
                 if len(text.strip()) < 3:
@@ -90,19 +95,19 @@ class ExcelProcessor:
                         'sentiment': sentiment_result['sentiment'],
                         'topic_name': topic_result['topic_name']
                     })
-                
-                if progress_callback:
-                    progress_callback(i + 1, len(texts))
                     
             except Exception as e:
-                print(f"Ошибка анализа текста {i}: {e}")
-                results.append({
-                    'text': text,
-                    'sentiment': 'neutral',
-                    'topic_name': 'Другое',
-                    'error': str(e)
-                })
-        
+                if str(e) == "Analysis stopped by user":
+                    print("🛑 Анализ остановлен по запросу")
+                    raise  # Пробрасываем исключение дальше
+                else:
+                    print(f"Ошибка анализа текста {i}: {e}")
+                    results.append({
+                        'text': text,
+                        'sentiment': 'neutral',
+                        'topic_name': 'Другое',
+                        'error': str(e)
+                    })
         return results
     
     def create_result_dataframe(self, original_df, texts_column, results):

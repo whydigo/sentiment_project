@@ -7,6 +7,7 @@ import torch
 import os
 import uuid
 import pandas as pd
+import threading
 from werkzeug.utils import secure_filename
 
 app = Flask(__name__)
@@ -17,6 +18,9 @@ app.config['DOWNLOAD_FOLDER'] = 'downloads'
 
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 os.makedirs(app.config['DOWNLOAD_FOLDER'], exist_ok=True)
+
+# Словарь для отслеживания флагов остановки
+stop_flags = {}
 
 print("🚀 Загрузка BERT моделей...")
 
@@ -244,10 +248,9 @@ def start_batch_analysis():
             }
         )
         
-        import threading
         thread = threading.Thread(
             target=process_batch_job,
-            args=(job_id, df, texts, column_name)  # Убрали options
+            args=(job_id, df, texts, column_name)
         )
         thread.daemon = True
         thread.start()
@@ -267,9 +270,19 @@ def process_batch_job(job_id, df, texts, column_name):
         batch_analyzer.update_job_progress(job_id, 0, len(texts))
         
         def progress_callback(current, total):
+            # Проверяем, не запрошена ли остановка
+            if stop_flags.get(job_id, False):
+                print(f"🛑 Задание {job_id} остановлено по запросу")
+                raise Exception("Analysis stopped by user")
             batch_analyzer.update_job_progress(job_id, current, total)
         
         results = excel_processor.analyze_batch(texts, progress_callback)
+        
+        # Проверяем остановку перед созданием DataFrame
+        if stop_flags.get(job_id, False):
+            print(f"🛑 Задание {job_id} остановлено, пропускаем создание результата")
+            return
+        
         result_df = excel_processor.create_result_dataframe(df, column_name, results)
         
         output_path, output_filename = excel_processor.save_to_excel(
@@ -278,14 +291,48 @@ def process_batch_job(job_id, df, texts, column_name):
             app.config['DOWNLOAD_FOLDER']
         )
         
+        # Финальная проверка остановки
+        if stop_flags.get(job_id, False):
+            print(f"🛑 Задание {job_id} остановлено, удаляем файл результата")
+            if os.path.exists(output_path):
+                os.remove(output_path)
+            return
+        
         batch_analyzer.complete_job(job_id, output_path, output_filename)
         print(f"✅ Задание {job_id} завершено. Файл: {output_filename}")
         
     except Exception as e:
-        batch_analyzer.fail_job(job_id, str(e))
-        print(f"❌ Ошибка в задании {job_id}: {e}")
-        import traceback
-        traceback.print_exc()
+        if str(e) == "Analysis stopped by user":
+            print(f"🛑 Задание {job_id} остановлено пользователем")
+            batch_analyzer.fail_job(job_id, "Остановлено пользователем")
+        else:
+            batch_analyzer.fail_job(job_id, str(e))
+            print(f"❌ Ошибка в задании {job_id}: {e}")
+            import traceback
+            traceback.print_exc()
+    finally:
+        # Очищаем флаг остановки
+        if job_id in stop_flags:
+            del stop_flags[job_id]
+
+@app.route('/stop_analysis/<job_id>', methods=['POST'])
+def stop_analysis(job_id):
+    """Остановка анализа"""
+    job = batch_analyzer.get_job(job_id)
+    
+    if not job:
+        return jsonify({'error': 'Задание не найдено'}), 404
+    
+    # Устанавливаем флаг остановки
+    stop_flags[job_id] = True
+    
+    # Обновляем статус задания
+    job['status'] = 'cancelled'
+    job['error'] = 'Анализ остановлен пользователем'
+    
+    print(f"🛑 Анализ {job_id} остановлен пользователем")
+    
+    return jsonify({'success': True, 'message': 'Анализ остановлен'})
 
 @app.route('/job_status/<job_id>')
 def job_status(job_id):
