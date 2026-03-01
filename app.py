@@ -2,12 +2,14 @@ from flask import Flask, render_template, request, jsonify, send_file, session
 from sentiment_model import BertSentimentAnalyzer
 from topic_model import BertTopicClassifier, SimpleTopicClassifier
 from excel_processor import ExcelProcessor, BatchAnalyzer
+from vk_parser import VKParser, VKAnalyzer
 import time
 import torch
 import os
 import uuid
 import pandas as pd
 import threading
+import json
 from werkzeug.utils import secure_filename
 
 app = Flask(__name__)
@@ -22,10 +24,19 @@ os.makedirs(app.config['DOWNLOAD_FOLDER'], exist_ok=True)
 # Словарь для отслеживания флагов остановки
 stop_flags = {}
 
-print("🚀 Загрузка BERT моделей...")
+# Словарь для заданий ВК
+vk_jobs = {}
 
+print("=" * 60)
+print("🚀 ЗАПУСК BERT-АНАЛИЗАТОРА")
+print("=" * 60)
+
+print("🔄 Загрузка моделей...")
+
+# Инициализация моделей
 sentiment_analyzer = BertSentimentAnalyzer()
 
+# Пробуем загрузить продвинутую модель для тематики
 try:
     topic_classifier = BertTopicClassifier()
     test_result = topic_classifier.classify("тестовое сообщение")
@@ -39,22 +50,45 @@ except Exception as e:
     print("🔄 Использую простой классификатор на правилах")
     topic_classifier = SimpleTopicClassifier()
 
+# Инициализация процессора Excel и менеджера заданий
 excel_processor = ExcelProcessor(sentiment_analyzer, topic_classifier)
 batch_analyzer = BatchAnalyzer(excel_processor)
 
+# Инициализация парсера ВК
+vk_parser = VKParser()
+vk_analyzer = VKAnalyzer(vk_parser, sentiment_analyzer, topic_classifier)
+
 print("✅ Все модели загружены!")
+print("=" * 60)
+print("🌐 Доступные страницы:")
+print("   📝 Одиночный анализ: http://localhost:5000")
+print("   📊 Загрузка Excel: http://localhost:5000/upload")
+print("   📱 Парсер ВК: http://localhost:5000/vk")
+print("=" * 60)
+
+# ==================== ГЛАВНЫЕ СТРАНИЦЫ ====================
 
 @app.route('/')
 def index():
+    """Главная страница с одиночным анализом"""
     topics = topic_classifier.get_all_topics()
     return render_template('index.html', topics=topics, model_type=type(topic_classifier).__name__)
 
 @app.route('/upload')
 def upload_page():
+    """Страница загрузки Excel"""
     return render_template('upload.html')
+
+@app.route('/vk')
+def vk_page():
+    """Страница парсера ВК"""
+    return render_template('vk_parser.html')
+
+# ==================== АНАЛИЗ ТЕКСТА ====================
 
 @app.route('/analyze', methods=['POST'])
 def analyze_text():
+    """API для анализа текста (одиночный режим)"""
     data = request.get_json()
     
     if not data or 'text' not in data:
@@ -67,17 +101,22 @@ def analyze_text():
     
     start_time = time.time()
     
+    # Анализ тональности через BERT
     sentiment_result = sentiment_analyzer.analyze(text)
+    
+    # Анализ тематики
     topic_result = topic_classifier.classify(text)
     
     process_time = time.time() - start_time
     
+    # Эмодзи для тональности
     emoji_map = {
         'positive': '😊',
         'negative': '😠', 
         'neutral': '😐'
     }
     
+    # Формирование ответа
     response = {
         'text': text,
         'sentiment': {
@@ -100,8 +139,11 @@ def analyze_text():
     
     return jsonify(response)
 
+# ==================== ПАКЕТНЫЙ АНАЛИЗ EXCEL ====================
+
 @app.route('/upload_excel', methods=['POST'])
 def upload_excel():
+    """Загрузка Excel файла"""
     print("=" * 50)
     print("🔄 Начало загрузки файла")
     print("=" * 50)
@@ -205,6 +247,7 @@ def upload_excel():
 
 @app.route('/start_batch_analysis', methods=['POST'])
 def start_batch_analysis():
+    """Запуск пакетного анализа Excel"""
     data = request.get_json()
     
     column_value = data.get('column', 0)
@@ -317,7 +360,7 @@ def process_batch_job(job_id, df, texts, column_name):
 
 @app.route('/stop_analysis/<job_id>', methods=['POST'])
 def stop_analysis(job_id):
-    """Остановка анализа"""
+    """Остановка анализа Excel"""
     job = batch_analyzer.get_job(job_id)
     
     if not job:
@@ -336,6 +379,7 @@ def stop_analysis(job_id):
 
 @app.route('/job_status/<job_id>')
 def job_status(job_id):
+    """Получение статуса задания Excel"""
     job = batch_analyzer.get_job(job_id)
     
     if not job:
@@ -349,12 +393,203 @@ def job_status(job_id):
         'result_filename': job.get('result_filename')
     })
 
+# ==================== ПАРСЕР ВК ====================
+
+@app.route('/start_vk_analysis', methods=['POST'])
+def start_vk_analysis():
+    """Запуск анализа ВК"""
+    data = request.get_json()
+    
+    token = data.get('token')
+    days = data.get('days', 7)
+    max_posts = data.get('max_posts', 100)
+    
+    if not token:
+        return jsonify({'error': 'Не указан токен ВК'}), 400
+    
+    try:
+        # Создаем парсер с токеном
+        parser = VKParser(token)
+        analyzer = VKAnalyzer(parser, sentiment_analyzer, topic_classifier)
+        
+        # Генерируем ID задания
+        job_id = f"vk_{int(time.time())}"
+        
+        # Сохраняем информацию о задании
+        vk_jobs[job_id] = {
+            'id': job_id,
+            'status': 'starting',
+            'progress': 0,
+            'total': max_posts,
+            'created_at': time.time()
+        }
+        
+        print(f"📱 Создано задание ВК: {job_id}")
+        
+        # Запускаем в фоне
+        thread = threading.Thread(
+            target=process_vk_job_auto,
+            args=(job_id, parser, analyzer, days, max_posts)
+        )
+        thread.daemon = True
+        thread.start()
+        
+        return jsonify({
+            'job_id': job_id,
+            'status': 'started'
+        })
+        
+    except Exception as e:
+        print(f"❌ Ошибка при создании задания: {e}")
+        return jsonify({'error': str(e)}), 500
+
+def process_vk_job_auto(job_id, parser, analyzer, days, max_posts):
+    """Обработка задания ВК в автоматическом режиме"""
+    try:
+        if job_id not in vk_jobs:
+            return
+        
+        # Этап 1: Сбор данных
+        vk_jobs[job_id]['status'] = 'collecting'
+        vk_jobs[job_id]['message'] = 'Идет сбор данных с различных источников...'
+        print(f"📱 ВК задание {job_id}: начинаем сбор постов")
+        
+        # Функция обратного вызова для прогресса сбора
+        def collect_callback(current, total, source_info):
+            if job_id in vk_jobs:
+                vk_jobs[job_id]['message'] = f'Обработано источников: {current}/{total} ({source_info})'
+        
+        # Собираем посты
+        df = parser.collect_all_posts(days, max_posts, progress_callback=collect_callback)
+        
+        # Проверка остановки
+        if stop_flags.get(job_id, False):
+            vk_jobs[job_id]['status'] = 'cancelled'
+            return
+        
+        if len(df) == 0:
+            vk_jobs[job_id]['status'] = 'error'
+            vk_jobs[job_id]['error'] = 'Не удалось собрать посты'
+            return
+        
+        # Этап 2: Анализ данных
+        vk_jobs[job_id]['status'] = 'analyzing'
+        vk_jobs[job_id]['total'] = len(df)
+        vk_jobs[job_id]['progress'] = 0
+        vk_jobs[job_id]['message'] = f'Начинаем анализ {len(df)} постов...'
+        
+        def analyze_callback(current, total):
+            if job_id in vk_jobs:
+                vk_jobs[job_id]['progress'] = current
+                vk_jobs[job_id]['message'] = f'Анализ: {current}/{total}'
+            if stop_flags.get(job_id, False):
+                raise Exception("Analysis stopped by user")
+        
+        # Анализируем посты
+        result_df = analyzer.analyze_posts(df, progress_callback=analyze_callback)
+        
+        if stop_flags.get(job_id, False):
+            vk_jobs[job_id]['status'] = 'cancelled'
+            return
+        
+        # Сохраняем в папку downloads
+        filename = analyzer.generate_report(result_df, app.config['DOWNLOAD_FOLDER'])
+        
+        # Получаем статистику
+        stats = analyzer.get_statistics(result_df)
+        
+        if job_id not in vk_jobs:
+            return
+        
+        # Сохраняем результат
+        vk_jobs[job_id].update({
+            'status': 'completed',
+            'progress': len(df),
+            'total': len(df),
+            'filename': filename,
+            'stats': stats,
+            'result_df': result_df.head(20).to_dict('records')  # Показываем 20 постов
+        })
+        
+        print(f"✅ ВК анализ {job_id} завершен. Файл: {filename}")
+        
+    except Exception as e:
+        if str(e) == "Analysis stopped by user":
+            print(f"🛑 ВК задание {job_id} остановлено пользователем")
+            if job_id in vk_jobs:
+                vk_jobs[job_id]['status'] = 'cancelled'
+        else:
+            print(f"❌ Ошибка в ВК задании {job_id}: {e}")
+            import traceback
+            traceback.print_exc()
+            if job_id in vk_jobs:
+                vk_jobs[job_id]['status'] = 'error'
+                vk_jobs[job_id]['error'] = str(e)
+    finally:
+        if job_id in stop_flags:
+            del stop_flags[job_id]
+
+@app.route('/vk_status/<job_id>')
+def vk_status(job_id):
+    """Статус задания ВК"""
+    job = vk_jobs.get(job_id)
+    
+    if not job:
+        return jsonify({'error': 'Задание не найдено'}), 404
+    
+    response = {
+        'status': job['status'],
+        'progress': job.get('progress', 0),
+        'total': job.get('total', 0),
+        'error': job.get('error')
+    }
+    
+    if job['status'] == 'completed':
+        response.update({
+            'filename': job.get('filename'),
+            'stats': job.get('stats'),
+            'preview': job.get('result_df', [])
+        })
+    elif job['status'] == 'starting':
+        response['message'] = 'Задание создается...'
+    elif job['status'] == 'collecting':
+        response['message'] = f'Сбор постов... ({job.get("progress", 0)}/{job.get("total", 0)})'
+    elif job['status'] == 'analyzing':
+        response['message'] = f'Анализ постов... ({job.get("progress", 0)}/{job.get("total", 0)})'
+    elif job['status'] == 'cancelled':
+        response['message'] = 'Анализ остановлен пользователем'
+    
+    return jsonify(response)
+
+@app.route('/stop_vk_analysis/<job_id>', methods=['POST'])
+def stop_vk_analysis(job_id):
+    """Остановка анализа ВК"""
+    if job_id in vk_jobs:
+        vk_jobs[job_id]['status'] = 'cancelled'
+        # Устанавливаем флаг остановки
+        stop_flags[job_id] = True
+        print(f"🛑 ВК задание {job_id} остановлено пользователем")
+        return jsonify({'success': True})
+    return jsonify({'error': 'Задание не найдено'}), 404
+
+@app.route('/vk_sources')
+def get_vk_sources():
+    """Получение популярных источников"""
+    return jsonify({'sources': get_default_sources()})
+
+# ==================== ОБЩИЕ МАРШРУТЫ ====================
+
 @app.route('/download/<filename>')
 def download_file(filename):
+    """Скачивание файла с результатами"""
+    # Проверяем в папке downloads
     filepath = os.path.join(app.config['DOWNLOAD_FOLDER'], filename)
     
     if not os.path.exists(filepath):
-        return jsonify({'error': 'Файл не найден'}), 404
+        # Проверяем в текущей папке (для файлов ВК)
+        filepath = filename
+        if not os.path.exists(filepath):
+            return jsonify({'error': 'Файл не найден'}), 404
     
     return send_file(
         filepath,
@@ -365,12 +600,18 @@ def download_file(filename):
 
 @app.route('/test_topics')
 def test_topics():
+    """Тестовая страница для проверки определения тем"""
     test_texts = [
-        "Сегодня прошел финальный матч чемпионата мира по футболу.",
-        "Apple представила новый iPhone 15 с улучшенной камерой.",
+        "Сегодня прошел финальный матч чемпионата мира по футболу. Сборная Бразилии одержала победу со счетом 2:1.",
+        "Apple представила новый iPhone 15 с улучшенной камерой и процессором A17.",
         "В Госдуме приняли новый закон о цифровых технологиях.",
-        "Вышел новый фильм Кристофера Нолана.",
-        "Цены на нефть выросли на фоне новостей из Саудовской Аравии."
+        "Вышел новый фильм Кристофера Нолана. В главных ролях снялись известные актеры.",
+        "Цены на нефть выросли на фоне новостей из Саудовской Аравии.",
+        "Ученые обнаружили новую экзопланету в зоне обитаемости.",
+        "Врачи рекомендуют пить больше воды и заниматься спортом.",
+        "В Эрмитаже открылась выставка картин импрессионистов.",
+        "В центре Москвы произошло серьезное ДТП с участием трех автомобилей.",
+        "Лучшие отели Турции для семейного отдыха на море."
     ]
     
     results = []
@@ -387,6 +628,7 @@ def test_topics():
 
 @app.route('/model_info')
 def model_info():
+    """Информация об используемых моделях"""
     model_type = type(topic_classifier).__name__
     
     info = {
@@ -403,19 +645,46 @@ def model_info():
         }
     }
     
+    if model_type == 'BertTopicClassifier':
+        info['topic_model']['model'] = 'Den4ikAI/ruBert-base-finetuned-russian-topic-classification'
+    
     return jsonify(info)
 
 @app.route('/demo_examples')
 def demo_examples():
+    """Примеры для демонстрации"""
     examples = [
-        {'text': 'Этот фильм просто великолепен!', 'expected_sentiment': 'positive', 'expected_topic': 'entertainment'},
-        {'text': 'Ужасный матч, наша команда провалилась.', 'expected_sentiment': 'negative', 'expected_topic': 'sports'},
-        {'text': 'В Госдуме обсуждают новый законопроект.', 'expected_sentiment': 'neutral', 'expected_topic': 'politics'}
+        {
+            'text': 'Этот фильм просто великолепен! Актерская игра на высоте, сюжет захватывает с первых минут.',
+            'expected_sentiment': 'positive',
+            'expected_topic': 'entertainment'
+        },
+        {
+            'text': 'Ужасный матч, наша команда провалилась. Защита никакая, вратарь пропустил три глупых гола.',
+            'expected_sentiment': 'negative',
+            'expected_topic': 'sports'
+        },
+        {
+            'text': 'В Госдуме обсуждают новый законопроект о цифровых технологиях. Депутаты планируют принять его до конца месяца.',
+            'expected_sentiment': 'neutral',
+            'expected_topic': 'politics'
+        },
+        {
+            'text': 'Apple представила новый iPhone с потрясающей камерой и невероятной производительностью.',
+            'expected_sentiment': 'positive',
+            'expected_topic': 'technology'
+        },
+        {
+            'text': 'Ученые из МГУ разработали новый метод лечения рака с помощью наночастиц.',
+            'expected_sentiment': 'positive',
+            'expected_topic': 'science'
+        }
     ]
     return jsonify({'examples': examples})
 
 @app.route('/batch_status')
 def batch_status():
+    """Статус всех заданий Excel"""
     batch_analyzer.cleanup_old_jobs()
     
     return jsonify({
@@ -431,14 +700,36 @@ def batch_status():
         ]
     })
 
-if __name__ == '__main__':
-    print("=" * 60)
-    print("🚀 ЗАПУСК BERT-АНАЛИЗАТОРА")
-    print("=" * 60)
-    print("🌐 Одиночный анализ: http://localhost:5000")
-    print("📊 Загрузка Excel: http://localhost:5000/upload")
-    print("=" * 60)
+@app.route('/vk_jobs_status')
+def vk_jobs_status():
+    """Статус всех заданий ВК"""
+    # Очищаем старые задания (старше часа)
+    current_time = time.time()
+    to_delete = []
     
+    for job_id, job in vk_jobs.items():
+        if current_time - job.get('created_at', 0) > 3600:
+            to_delete.append(job_id)
+    
+    for job_id in to_delete:
+        del vk_jobs[job_id]
+    
+    return jsonify({
+        'active_jobs': len(vk_jobs),
+        'jobs': [
+            {
+                'id': j['id'],
+                'status': j['status'],
+                'progress': f"{j.get('progress', 0)}/{j.get('total', 0)}"
+            }
+            for j in vk_jobs.values()
+        ]
+    })
+
+# ==================== ЗАПУСК ====================
+
+if __name__ == '__main__':
+    # Очищаем кэш GPU если есть
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
     
